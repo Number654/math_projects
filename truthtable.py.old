@@ -1,0 +1,295 @@
+# -*- coding: utf-8 -*-
+
+from copy import deepcopy as copy
+from itertools import permutations
+
+FUNC = {"~": "not", "/\\": "and", "\\/": "or", "=": "==", "^": "^", "->": "<="}
+LATIN = "abcdefghijklmnopqrstuvwxyz"
+
+"""
+        ~  - not
+        /\ - and
+        \/ - or
+        =  - ==
+        ^  - xor
+        -> - (<=)
+        
+        
+        0 - False
+        1 - True
+        ? - None (unknown value)
+
+"""
+
+
+def format_bin(bin_integer, signs):
+    s = str(bin_integer)[2:]
+    z = signs-len(s)
+    return [0 if i <= z else int(s[i-1-z]) for i in range(1, signs+1)]
+
+
+def move(lst, index, nindex):
+    new_vaues = copy(lst)
+    val = new_vaues.pop(index)
+    new_vaues.insert(nindex, val)
+    return new_vaues
+
+
+class TruthTable:
+
+    def __init__(self, variables, expression):
+        if not isinstance(expression, LogicalExpression):
+            raise TypeError("Unknown type for logical expression: %s" % type(expression))
+        self.vars = variables
+        self.rows = []
+        self.expression = expression
+        self.nvars = len(variables)
+
+    def __str__(self):
+        s = ""
+        # head
+        head = [*self.vars, " func"]
+        for i in head:
+            s += (i + " ")
+        s = (s[:-1] + "\n")
+
+        for x in self.rows:
+            _x = str(x)
+            s += (_x[:-1] + " %s\n" % _x[-1])
+
+        del _x
+        return s[:-1]
+
+    def __repr__(self):
+        return str(self.__str__())
+
+    def append(self, row):
+        # row - object Row
+        if not isinstance(row, Row):
+            raise TypeError("Unknown type for append row to truth table: %s" % type(row))
+        self.rows.append(row)
+
+    def row_in(self, row):
+        for x in self.rows:
+            if x == row:
+                return True
+        return False
+
+    def generate_rows(self, func=None):
+        count = 0
+        rng = range(2**self.nvars)
+        if func is not None:
+            func = int(bool(func))
+            for x in rng:
+                b = format_bin(bin(count), self.nvars)
+                ev = self.expression.evaluate(self.vars, b)
+                if ev == func:
+                    self.append(Row(b + [ev,]))
+                count += 1
+            del func
+        else:
+            for x in rng:
+                b = format_bin(bin(count), self.nvars)
+                ev = self.expression.evaluate(self.vars, b)
+                self.append(Row(b + [ev,]))
+                count += 1
+        del b, ev, rng
+
+    def contains(self, given):
+        if not isinstance(given, GivenTable):
+            raise TypeError("'given' argument must be only GivenTable instance")
+
+        # Те ряды, что уже совпали с некоторыми из рядов фрагмента и не могут подходить для проверки остальных
+        found = []  # рядов фрагмента
+        result = False
+        for i, given_row in enumerate(given.rows):
+            interm = False
+            for y, row in enumerate(self.rows):
+                if row == given_row and y not in found:
+                    found.append(y)
+                    interm = True
+                    break
+            if not interm:
+                break
+            if i+1 == given.amount:
+                result = True
+                break
+        del interm, found
+        return result
+
+    # Finds head of given table according to data from this very truthtable
+    def find_given(self, given, all_=True):
+        """
+        :param given: GivenTable instance - fragment of truthtable
+        :param all_: True if need to find all solutions
+        :return: list of solutions
+        """
+        if not isinstance(given, GivenTable):
+            raise TypeError("'find_given' method requires GivenTable instance, not '%s'" % type(given))
+        if self.contains(given) and not all_:
+            return [''.join(self.vars)]
+
+        result = []
+        given = copy(given)
+        given_const = copy(given)
+        for variant_i in permutations(range(self.nvars)):
+            given.move_pattern(variant_i)
+            if self.contains(given):
+                result.append(''.join((self.vars[x] for x in variant_i)))
+                if not all_:
+                    break
+            given = copy(given_const)  # Rolling back to the initial variant, or there will be double pattern effect
+
+        del given, given_const
+        return result
+
+
+class GivenTable:
+
+    def __init__(self, rows=()):
+        self.rows = list(rows)
+        self.amount = len(self.rows)
+        self.nvars = len(self.rows[0])-1 if self.amount else 0
+        # -1 because the last value of every row is value of function
+
+    def __str__(self):
+        s = ""
+        for r in self.rows:
+            _r = str(r)
+            s += (_r[:-1] + " %s\n" % _r[-1])
+        del _r
+        return s[:-1]
+
+    def __repr__(self):
+        return str(self.__str__())
+
+    def append(self, row):
+        # row - object Row
+        if not isinstance(row, Row):
+            raise TypeError("Unknown type for append row to truth table: %s" % type(row))
+        self.rows.append(row)
+
+    # move column of values for one variable
+    def move_column(self, old_pos, pos):
+        if old_pos == pos:  # If we don't have to move anything
+            return
+        # we can't use "for r in self.amount" structure because in this case "r" is just a copy of every of rows
+        for r in range(self.amount):
+            self.rows[r].move(old_pos, pos)
+
+    def move_pattern(self, pattern):
+        if tuple(pattern) == tuple(range(self.nvars)):
+            return
+        # For example, old position is for head indexes 0 1 2; pattern is 1 0 2
+        # Need to move columns in such way that every row of self is posted matching the pattern
+        for r in range(self.amount):
+            self.rows[r].move_pattern(pattern)
+
+
+class Row:
+
+    def __init__(self, values=()):
+        self.values = list(values)
+        self.length = len(self.values)
+
+    def __str__(self):
+        s = ""
+        for x in self.values:
+            if x is None:
+                s += "? "
+            else:
+                s += (str(x) + " ")
+        return s[:-1]
+
+    def __repr__(self):
+        return str(self.__str__())
+
+    def __eq__(self, other):
+        if not isinstance(other, Row):
+            raise TypeError("Unknown type to check equality: %s" % type(other))
+
+        if self.length != other.length:
+            return False
+        for se, ot in zip(self.values, other.values):
+            if se is not None and ot is not None:
+                if se != ot:
+                    return False
+
+        return True
+
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
+    def __len__(self):
+        return self.length
+
+    # Method for checking indexes
+    def __move_exeptions(self, index, nindex):
+        if index == self.length-1:
+            raise IndexError("Cannot move value of function (the last element of row)")
+        if index > self.length-1:
+            raise IndexError("Index of element of row is out of range")
+
+        if nindex == self.length-1:
+            raise IndexError("Cannot move element of row to index of value of function")
+        if nindex > self.length-1:
+            raise IndexError("New index of element is out of range")
+
+        if nindex < 0:
+            raise IndexError("Cannot move element of row to index: %s" % str(nindex))
+        if index < 0:
+            raise IndexError("Invalid element index: %s" % str(index))
+
+    # move value at one index to new index without replacement
+    def move(self, index, nindex, change=True):
+        if index == nindex:
+            if not change:
+                return Row(self.values)
+            return
+        self.__move_exeptions(index, nindex)
+        if change:
+            self.values = move(self.values, index, nindex)
+            return
+        return Row(move(self.values, index, nindex))
+
+    def move_pattern(self, pattern, change=True):
+        # 012 -> 102
+        le = len(pattern)
+        if le != self.length-1:
+            raise ValueError("Length of pattern must be equal to length of row (%s != %s)" % (self.length-1, le))
+        if tuple(pattern) == tuple(range(self.length-1)):  # If we don't have to move anything
+            if not change:
+                return Row(self.values)
+            return
+        new = [None]*le
+        for val, new_index in zip(self.values[:-1], pattern):
+            new[new_index] = val
+        new.append(self.values[-1])
+        del le
+        if change:
+            self.values = copy(new)
+            del new
+            return
+        return Row(new)
+
+
+class LogicalExpression:
+
+    def __init__(self, string):
+        _string = str(string)
+        for x in FUNC.keys():
+            _string = _string.replace(x, FUNC[x])
+
+        self.expression = _string
+
+    def __str__(self):
+        return self.expression
+
+    def __repr__(self):
+        return str(self.__str__())
+
+    def evaluate(self, names, values):
+        data_dict = dict()
+        for n, v in zip(names, values):
+            data_dict[n] = v
+        return int(eval(self.expression, data_dict))

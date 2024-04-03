@@ -1,0 +1,544 @@
+# -*- coding: utf-8 -*-
+
+from math import log10
+from copy import deepcopy as copy
+from itertools import permutations
+from collections.abc import Collection
+from typing import List
+
+FUNC = {"~": "not", "/\\": "and", "\\/": "or", "=": "==", "^": "^", "->": "<="}
+LATIN = "abcdefghijklmnopqrstuvwxyz"
+
+"""
+        ~  - not
+        /\ - and
+        \/ - or
+        =  - ==
+        ^  - xor
+        -> - (<=)
+        
+        
+        0 - False
+        1 - True
+        ? - None (unknown value)
+
+"""
+
+
+def format_bin(bin_integer, signs):
+    s = str(bin_integer)[2:]
+    z = signs-len(s)
+    return [0 if i <= z else int(s[i-1-z]) for i in range(1, signs+1)]
+
+
+def move(lst, index, nindex):
+    new_vaues = copy(lst)
+    val = new_vaues.pop(index)
+    new_vaues.insert(nindex, val)
+    return new_vaues
+
+
+# Сравнить два набора данных, если считать, что, например, (None и 0) или (None и 1) - два равных элемента наборов
+def eq_none(first, second):
+    if len(first) != len(second):
+        return False
+    for fi, se in zip(first, second):
+        if fi is not None and se is not None:
+            if fi != se:
+                return False
+    return True
+
+
+class BaseTable:
+
+    """
+    Superclass for any table class in this module.
+    """
+
+    def __init__(self, rows=(), variables=None, expressions=None):
+        if variables is None and expressions is None and not rows:
+            return
+        if isinstance(variables, int) and isinstance(expressions, int):
+            self.nexpr = expressions
+            self.nvars = variables
+        else:
+            # Checking for bad data
+            if not isinstance(variables, Collection):
+                raise TypeError("'variables' argument must be sized iterable, not %s" % type(variables))
+            if not (isinstance(expressions, Collection) or isinstance(expressions, LogicalExpression)):
+                raise TypeError("'expressions' argument must be sized iterable or LogicalExpression, not %s" %
+                                type(expressions))
+            if isinstance(expressions, LogicalExpression):  # if we got only one expression
+                expressions = [expressions]
+            if not all((isinstance(i, LogicalExpression) for i in expressions)):
+                raise TypeError("Unknown type for logical expression")
+            if not expressions or not variables:
+                raise ValueError("Cannot build truth table with no variables or no logical expressions")
+
+            self.vars = list(variables)
+            self.expressions = list(expressions)
+            self.nexpr = len(expressions)
+            self.nvars = len(variables)
+
+        self.rows = [] if not rows else list(rows)
+
+
+class BaseTruthTable:
+
+    def __init__(self, variables, expressions):
+        if not isinstance(variables, Collection):
+            raise TypeError("'variables' argument must be sized iterable, not %s" % type(variables))
+        if not (isinstance(expressions, Collection) or isinstance(expressions, LogicalExpression)):
+            raise TypeError("'expressions' argument must be sized iterable or LogicalExpression, not %s" %
+                            type(expressions))
+        if isinstance(expressions, LogicalExpression):  # if we got only one expression
+            expressions = [expressions]
+        if not all((isinstance(i, LogicalExpression) for i in expressions)):
+            raise TypeError("Unknown type for logical expression")
+        if not expressions or not variables:
+            raise ValueError("Cannot build truth table with no variables or no logical expressions")
+
+        self.vars = list(variables)
+        self.rows = []
+        self.expressions = list(expressions)
+        self.nexpr = len(expressions)
+        self.nvars = len(variables)
+
+    def __str__(self):
+        # Firstly, generate head of table
+        strings = [" ".join(self.vars)+"  "+"  ".join(("func%s" % x for x in range(1, self.nexpr+1)))]
+        base = None
+        for r in self.rows:
+            base = " ".join(map(str, r.values[:self.nvars]))+"  "
+            for n, expr_val in enumerate(r.values[self.nvars:], start=1):
+                base += str(expr_val)+(" "*(6+int(log10(n))) if n < self.nexpr else "")
+            strings.append(base)
+        del base
+        return "\n".join(strings)
+
+    def __repr__(self):
+        return str(self.__str__())
+
+    def __eq__(self, other):
+        if self.abstract_equal(other) and (self.rows == other.rows):
+            return True
+        return False
+
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
+    def abstract_equal(self, other):
+        """
+        Method for checking this truth table for equality to other if generated rows do not matter
+        :param other: Instance of BaseTruthTable
+        :return: True if equal
+        """
+        if not isinstance(other, BaseTruthTable):
+            raise TypeError("'==' not supported between instances of %s and %s" % (type(self), type(other)))
+        if (self.vars != other.vars or self.expressions != other.expressions or self.nexpr != other.nexpr
+                or self.nvars != other.nvars):
+            return False
+        return True
+
+    def append(self, row):
+        # row - object Row
+        if not isinstance(row, Row):
+            raise TypeError("Unknown type for append row to truth table: %s" % type(row))
+        if len(row) != self.nexpr + self.nvars:
+            raise ValueError("Unmatching length of row and amount of columns in this table (%s != %s)" %
+                             (len(row), self.nexpr + self.nvars))
+        self.rows.append(row)
+
+    def row_in(self, row):
+        if not isinstance(row, Row):
+            raise TypeError("Unknown type for checking in truth table: %s" % type(row))
+        for x in self.rows:
+            if x == row:
+                return True
+        return False
+
+    def generate_rows(self, func_vals=()):
+        rng = range(2**self.nvars)
+        count = 0
+        if func_vals:
+            if len(func_vals) != self.nexpr:
+                raise ValueError("Unmatching length of seq of values and expressions amount (%s != %s)" %
+                                 (len(func_vals), self.nexpr))
+            for x in rng:
+                b = format_bin(bin(count), self.nvars)
+                ev = []
+                pass_row = False  # If the whole evaluated row doesn't match func_vals
+                for ex, fval in zip(self.expressions, func_vals):
+                    evaluated = ex.evaluate(self.vars, b)
+                    if fval is not None:
+                        if evaluated == fval:
+                            ev.append(evaluated)
+                        else:
+                            pass_row = True  # This row of values of functions doesn't match func_vals
+                            break
+                    else:
+                        ev.append(evaluated)  # If value of function, named fval doesn't matter
+                if not pass_row:
+                    self.append(Row(b + ev))  # Append to generated rows if values of functions are good
+                count += 1
+            del ev, evaluated, pass_row
+        else:
+            for x in rng:
+                b = format_bin(bin(count), self.nvars)
+                self.append(Row(b + [ex.evaluate(self.vars, b) for ex in self.expressions]))
+                count += 1
+        del b, count, rng
+
+    def contains(self, given, variables=True, exprs=True):
+        """
+        Check if the given fragment is in this truth table.
+        If variables=True and exprs=True => it's unknown which of columns are for variables, which are for exprs.
+        If variables=True and exprs=False => it's known that columns of values of exprs are the last ones.
+        If variables=False and expr=True => the same situation like previous one.
+        :param given: Instance of BaseGivenTable class, given fragment of truth table
+        :param variables: True if need check all the values of variables
+        :param exprs: True if need check all the values of expressions
+        :return: True if given fragment is in this truth table
+        """
+        if not variables and not exprs:  # If we do not check all the table - return None
+            return
+        if not isinstance(given, BaseGivenTable):
+            raise TypeError("'given' argument must be only BaseGivenTable instance")
+        if given.nvars != self.nvars or given.nexpr != self.nexpr:
+            raise ValueError("Unmatching amount of columns of values of variables or expressions")
+        if (variables or exprs) and not given.func_last:
+            raise ValueError("Given fragment of truth table does not contain info about position of columns of exprs")
+
+        indexes = (None, None)
+        if variables and not exprs:
+            indexes = (None, self.nvars)
+        elif variables and exprs:
+            indexes = (None, None)
+        elif not variables and exprs:
+            indexes = (self.nvars, None)
+
+        found = []
+        result = False
+        for i, given_row in enumerate(given.rows):
+            interm = False
+            for y, row in enumerate(self.rows):
+                if row[indexes[0]:indexes[1]] == given_row[indexes[0]:indexes[1]] and y not in found:
+                    found.append(y)
+                    interm = True
+                    break
+            if not interm:
+                break
+            if i+1 == given.amount:
+                result = True
+                break
+        del interm, found, indexes
+        return result
+
+    def find_given(self, given, _all=True):
+        pass
+
+
+class BaseGivenTable:
+
+    def __init__(self, rows=(), expr_amount=1, vars_amount=1, func_last=False):
+        self.rows = list(rows)
+        self.amount = len(self.rows)
+        self.nexpr = expr_amount
+        self.nvars = vars_amount
+        self.func_last = func_last  # If it is known that last of columns are columns of values of expressions
+
+    def __str__(self):
+        return "\n".join((" ".join(((" " if i == self.nvars and self.func_last else "") +
+                                    (str(b) if b is not None else "?") for i, b in enumerate(r.values)))
+                          for r in self.rows))
+
+    def __repr__(self):
+        return str(self.__str__())
+
+    def append(self, row):
+        # row - object Row
+        if not isinstance(row, Row):
+            raise TypeError("Unknown type for append row to truth table: %s" % type(row))
+        if len(row) != self.nexpr + self.nvars:
+            raise ValueError("Unmatching length of row and amount of columns in this table (%s != %s)" %
+                             (len(row), self.nexpr + self.nvars))
+        self.rows.append(row)
+        self.amount += 1
+
+    # Moving just for column with variable values, not with function(s) values
+    def move_values_column(self, old_pos, pos):
+        if not self.func_last:
+            raise Exception("Unable to move: unknown positions of columns of values of variables and expressions")
+        if old_pos == pos:
+            return
+        if old_pos+1 > self.nvars or pos+1 > self.nvars:
+            raise IndexError("Index is out of range")
+        for r in range(self.amount):
+            self.rows[r].move(old_pos, pos, lim=self.nvars)
+
+    def move_expr_column(self, old_pos, pos):
+        # Note: indexes are absolute, not like if there are 2 expr colums we have to move 0 to 1
+        if not self.func_last:
+            raise Exception("Unable to move: unknown positions of columns of values of variables and expressions")
+        if old_pos == pos:
+            return
+        if old_pos < self.nvars or pos < self.nvars:
+            raise IndexError("Index is out of range")
+        for r in range(self.amount):
+            self.rows[r].move(old_pos, pos, start=self.nvars)
+
+    def move_pattern(self, pattern, start=0):
+        if tuple(pattern) == tuple(range(self.nvars+self.nexpr-start)):
+            return
+        for r in range(self.amount):
+            self.rows[r].move_pattern(pattern, start=start)
+
+
+class _TruthTable:
+
+    def __init__(self, variables, expression):
+        if not isinstance(expression, LogicalExpression):
+            raise TypeError("Unknown type for logical expression: %s" % type(expression))
+        self.vars = variables
+        self.rows = []
+        self.expression = expression
+        self.nvars = len(variables)
+
+    def __str__(self):
+        s = ""
+        # head
+        head = [*self.vars, " func"]
+        for i in head:
+            s += (i + " ")
+        s = (s[:-1] + "\n")
+
+        for x in self.rows:
+            _x = str(x)
+            s += (_x[:-1] + " %s\n" % _x[-1])
+
+        del _x
+        return s[:-1]
+
+    def __repr__(self):
+        return str(self.__str__())
+
+    def append(self, row):
+        # row - object Row
+        if not isinstance(row, Row):
+            raise TypeError("Unknown type for append row to truth table: %s" % type(row))
+        self.rows.append(row)
+
+    def row_in(self, row):
+        if not isinstance(row, Row):
+            raise TypeError("Unknown type for checking in truth table: %s" % type(row))
+        for x in self.rows:
+            if x == row:
+                return True
+        return False
+
+    def generate_rows(self, func=None):
+        count = 0
+        rng = range(2**self.nvars)
+        if func is not None:
+            func = int(bool(func))
+            for x in rng:
+                b = format_bin(bin(count), self.nvars)
+                ev = self.expression.evaluate(self.vars, b)
+                if ev == func:
+                    self.append(Row(b + [ev,]))
+                count += 1
+            del func
+        else:
+            for x in rng:
+                b = format_bin(bin(count), self.nvars)
+                ev = self.expression.evaluate(self.vars, b)
+                self.append(Row(b + [ev,]))
+                count += 1
+        del b, ev, rng
+
+    def contains(self, given):
+        if not isinstance(given, GivenTable):
+            raise TypeError("'given' argument must be only GivenTable instance")
+
+        # Те ряды, что уже совпали с некоторыми из рядов фрагмента и не могут подходить для проверки остальных
+        found = []  # рядов фрагмента
+        result = False
+        for i, given_row in enumerate(given.rows):
+            interm = False
+            for y, row in enumerate(self.rows):
+                if row == given_row and y not in found:
+                    found.append(y)
+                    interm = True
+                    break
+            if not interm:
+                break
+            if i+1 == given.amount:
+                result = True
+                break
+        del interm, found
+        return result
+
+    # Finds head of given table according to data from this very truthtable
+    def find_given(self, given, all_=True):
+        """
+        :param given: GivenTable instance - fragment of truthtable
+        :param all_: True if need to find all solutions
+        :return: list of solutions
+        """
+        if not isinstance(given, GivenTable):
+            raise TypeError("'find_given' method requires GivenTable instance, not '%s'" % type(given))
+        if self.contains(given) and not all_:
+            return [''.join(self.vars)]
+
+        result = []
+        given = copy(given)
+        given_const = copy(given)
+        for variant_i in permutations(range(self.nvars)):
+            given.move_pattern(variant_i)
+            if self.contains(given):
+                result.append(''.join((self.vars[x] for x in variant_i)))
+                if not all_:
+                    break
+            given = copy(given_const)  # Rolling back to the initial variant, or there will be double pattern effect
+
+        del given, given_const
+        return result
+
+
+class GivenTable:
+
+    def __init__(self, rows=()):
+        self.rows = list(rows)
+        self.amount = len(self.rows)
+        self.nvars = len(self.rows[0])-1 if self.amount else 0
+        # -1 because the last value of every row is value of function
+
+    def __str__(self):
+        s = ""
+        for r in self.rows:
+            _r = str(r)
+            s += (_r[:-1] + " %s\n" % _r[-1])
+        del _r
+        return s[:-1]
+
+    def __repr__(self):
+        return str(self.__str__())
+
+    def append(self, row):
+        # row - object Row
+        if not isinstance(row, Row):
+            raise TypeError("Unknown type for append row to truth table: %s" % type(row))
+        self.rows.append(row)
+        self.amount += 1
+
+    # move column of values for one variable
+    def move_column(self, old_pos, pos):
+        if old_pos == pos:  # If we don't have to move anything
+            return
+        # we can't use "for r in self.amount" structure because in this case "r" is just a copy of every of rows
+        for r in range(self.amount):
+            self.rows[r].move(old_pos, pos)
+
+    def move_pattern(self, pattern):
+        if tuple(pattern) == tuple(range(self.nvars)):
+            return
+        # For example, old position is for head indexes 0 1 2; pattern is 1 0 2
+        # Need to move columns in such way that every row of self is posted matching the pattern
+        for r in range(self.amount):
+            self.rows[r].move_pattern(pattern)
+
+
+class Row:
+
+    def __init__(self, values=()):
+        self.values = list(values)
+        self.length = len(self.values)
+
+    def __str__(self):
+        return " ".join((str(v) if v is not None else "?" for v in self.values))
+
+    def __repr__(self):
+        return str(self.__str__())
+
+    def __eq__(self, other):
+        if not isinstance(other, Row):
+            raise TypeError("Unknown type to check equality: %s" % type(other))
+        return eq_none(self.values, other.values)
+
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
+    def __len__(self):
+        return self.length
+
+    def __getitem__(self, item):
+        v = self.values[item]
+        if not isinstance(v, Collection):
+            return Row((v,))
+        return Row(v)
+
+    # Method for checking indexes
+    def __move_exeptions(self, index, nindex):
+        if nindex < 0 or nindex > self.length-1:
+            raise IndexError("Cannot move element of row to index: %s; max %s, min 0" % (nindex, self.length-1))
+        if index < 0 or index > self.length-1:
+            raise IndexError("Invalid index of element: %s; max %s, min 0" % (index, self.length-1))
+
+    # move value at one index to new index without replacement
+    def move(self, index, nindex, change=True, lim=None, start=0):
+        if lim is not None:
+            if lim <= start:
+                raise IndexError("Limite of index <= start index (%s <= %s)" % (lim, start))
+        if index == nindex:
+            if not change:
+                return Row(self.values)
+            return
+        self.__move_exeptions(index, nindex)
+        val = self.values[start:lim]
+        n_val = (self.values[:start]+move(val, index-start, nindex-start) +
+                 self.values[(self.length-(lim if lim is not None else 0)):])
+        del val
+        if change:
+            self.values = copy(n_val)
+            del n_val
+            return
+        return Row(n_val)
+
+    def move_pattern(self, pattern, change=True, start=0):
+        # 012 -> 102
+        # Note: indexes are NOT absolute: pattern works only in the specified range [start:stop]
+        le = len(pattern)
+        if le > (self.length-start):
+            raise ValueError("Pattern is too long (start index %s; pattern %s values; row %s values accessible)" %
+                             (start, le, self.length-start))
+        new = [None]*le
+        for val, new_index in zip(self.values[start:(start+le)], pattern):
+            new[new_index] = val
+        n_new = self.values[:start]+new+self.values[(start+le):]
+        del new, le
+        if change:
+            self.values = copy(n_new)
+            return
+        return Row(n_new)
+
+
+class LogicalExpression:
+
+    def __init__(self, string):
+        _string = str(string)
+        for x in FUNC.keys():
+            _string = _string.replace(x, FUNC[x])
+
+        self.expression = _string
+
+    def __str__(self):
+        return self.expression
+
+    def __repr__(self):
+        return str(self.__str__())
+
+    def evaluate(self, names, values):
+        data_dict = dict()
+        for n, v in zip(names, values):
+            data_dict[n] = v
+        return int(eval(self.expression, data_dict))

