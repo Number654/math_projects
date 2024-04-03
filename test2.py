@@ -19,7 +19,7 @@ ta = GivenKnownExpressionsTable((Row((1, 1, 0, 1, 1)),
 print(ta1.find_given(ta))"""
 
 
-test1 = r"x|y"
+test1 = r"x^y"
 test2 = r"(x = ~~y) -> ((z -> ~w) /\ (w -> y))"
 test3 = r"()()()(())"
 

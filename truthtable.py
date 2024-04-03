@@ -7,6 +7,7 @@ from collections.abc import Collection
 
 
 UNICODE_FUNC = {"~": "¬", "/\\": "∧", "\\/": "∨", "->": "→", "=": "≡", "^": "⊕", "|": "∨", "&": "∧"}
+DEFAULT_FUNC = {"¬": "~", "∧": "/\\", "∨": "\\/", "→": "->", "≡": "=", "⊕": "^"}
 ENDVAR = r"\/)=>^"
 ENDVAR_LTOR = r"\/)=-^"
 WRAPPERS = "=>^"
@@ -646,6 +647,9 @@ class LogicalParser:
                     result += sym
                     if (sym in NUM and var_stack) or sym in LATIN:
                         var_stack += sym
+                    elif var_stack:
+                        variables.add(var_stack)
+                        var_stack = ""
             if not_close_index is not None and i == not_close_index:
                 result += ")"
                 not_close_index = None
