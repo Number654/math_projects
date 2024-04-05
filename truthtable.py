@@ -371,7 +371,8 @@ class TruthTable(BaseTable):
         else:
             for x in rng:
                 b = format_bin(bin(count), self.nvars)
-                self.append(Row(b + [ex.evaluate(self.vars, b) for ex in self.expressions]))
+                self.append(Row(b + [ex.evaluate({var: val for var, val in zip(self.vars, b)})
+                                     for ex in self.expressions]))
                 count += 1
         del b, count, rng
 
@@ -559,7 +560,7 @@ class LogicalExpression:
         self.expression, self.variables = LogicalParser.parse(str(string))
         self.uni_convert = unicode_support
         if check:
-            self.evaluate(self.variables, (0,)*len(self.variables))
+            self.evaluate({key: 0 for key in self.variables})  # Generates exception if something is wrong
         if unicode_support:
             self.raw_string = string
 
@@ -577,13 +578,22 @@ class LogicalExpression:
     def __ne__(self, other):
         return not self.__eq__(other)
 
-    def evaluate(self, names, values):
-        if len(names) != len(values):
-            raise ValueError("Unmatching amount of variable names and values")
-        data_dict = dict()
-        for n, v in zip(names, values):
-            data_dict[n] = v
-        return int(eval(self.expression, data_dict))
+    def evaluate(self, keyval):
+        _keyval = copy(keyval)
+        keys = set(_keyval.keys())
+        lk = len(keys)
+        lv = len(self.variables)
+        if lk < lv:
+            raise NameError("Logical expression requires %s variables, %s given" % (lv, lk))
+        missing = tuple(self.variables.difference(keys.intersection(self.variables)))
+        if missing:
+            # If there are a lot of given vars but at least one required wasn't given
+            raise NameError("Not all required variables given; missing: %s" % str(missing))
+        del missing, lk, lv
+        for diff in keys.difference(self.variables):
+            _keyval.pop(diff)
+        del keys
+        return int(eval(self.expression, _keyval))
 
     def to_unicode(self):
         if not self.uni_convert:
@@ -657,7 +667,7 @@ class LogicalParser:
                 variables.add(var_stack)
                 var_stack = ""
         del level, not_close_index, two_sign_operat, stack, var_stack, imax
-        return result, tuple(variables)
+        return result, variables
 
     @staticmethod
     def lookup(not_index, level, data):  # Close opened bracket

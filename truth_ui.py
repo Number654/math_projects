@@ -146,11 +146,16 @@ class UiTruthtableWindowNitro(UiTruthtableWindow):
             self.del_func_btn.setEnabled(False)
 
     def confirm_functions(self):
+        if not self.data_container.func_list:
+            return
         msg = QMessageBox.question(self.parent, "Confirm action",
                                    "Are you sure want to confirm all functions? Changing functions will be impossible.")
         if msg == QMessageBox.Yes:
             self.functions_group.setEnabled(False)
             self.fragment_group.setEnabled(True)
+
+    def generate_given_head(self):
+        pass
 
 
 class TruthWindow(QMainWindow):

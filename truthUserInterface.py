@@ -454,7 +454,7 @@ class UiTruthtableWindow(object):
         self.generate_head_btn.setFont(font)
         self.generate_head_btn.setObjectName("generate_head_btn")
         self.fragment_layout.addWidget(self.generate_head_btn)
-        self.fragment_table = QtWidgets.QTableView(self.widget2)
+        self.fragment_table = QtWidgets.QTableWidget(self.widget2)
         self.fragment_table.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOn)
         self.fragment_table.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOn)
         self.fragment_table.setObjectName("fragment_table")
