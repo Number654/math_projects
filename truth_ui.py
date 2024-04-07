@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 
 from truthUserInterface import UiTruthtableWindow
-from truthtable import LogicalExpression, DEFAULT_FUNC
-from PyQt5.QtWidgets import *
+from truthtable import LogicalExpression, DEFAULT_FUNC, NUM
+from PyQt5.QtWidgets import QApplication, QMainWindow, QMessageBox, QTableWidgetItem
 import sys
 
 
@@ -49,6 +49,9 @@ class DataContainer:
         for f in self.func_list:
             self.variables.update(f.variables)
 
+    def del_given_row(self, index):
+        self.given_rows.pop(index)
+
     def clear_func(self):
         self.func_list = []
         self.variables = set()
@@ -67,6 +70,8 @@ class UiTruthtableWindowNitro(UiTruthtableWindow):
         super().__init__()
         self.parent = parent
         self.data_container = _data_container
+        self.head_generated = False
+        self.changing_row = False
 
     def bind(self):
         self.add_func_btn.clicked.connect(self.add_function)
@@ -92,9 +97,19 @@ class UiTruthtableWindowNitro(UiTruthtableWindow):
         self.one_btn.clicked.connect(lambda: self.insert_func_char("1 "))
         self.openbrackets_btn.clicked.connect(lambda: self.insert_func_char("("))
 
+        self.generate_head_btn.clicked.connect(self.generate_given_head)
+        self.add_row_btn.clicked.connect(self.add_given_row)
+        self.del_row_btn.clicked.connect(self.delete_row)
+        self.change_row_btn.clicked.connect(self.choose_change)
+        self.apply_change_row_btn.clicked.connect(self.apply_changes)
+
+        self.clearall_btn.clicked.connect(self.clearall)
+        self.get_result_btn.clicked.connect(self.compute_result)
+
         self.func_list.itemClicked.connect(self.change_func)
 
-    def generate_error(self, text):
+    @staticmethod
+    def generate_error(text):
         msg = QMessageBox()
         msg.setWindowTitle("Error")
         msg.setIcon(QMessageBox.Critical)
@@ -133,6 +148,7 @@ class UiTruthtableWindowNitro(UiTruthtableWindow):
             sel = self.func_list.selectedIndexes()[0].row()
             self.func_list.takeItem(sel)
             self.data_container.del_func(sel)
+            self.func_list.clearSelection()
             del sel
             if not self.data_container.func_list:
                 self.del_func_btn.setEnabled(False)
@@ -153,9 +169,150 @@ class UiTruthtableWindowNitro(UiTruthtableWindow):
         if msg == QMessageBox.Yes:
             self.functions_group.setEnabled(False)
             self.fragment_group.setEnabled(True)
+            self.func_list.clearSelection()
+            self.func_edit.clear()
 
     def generate_given_head(self):
-        pass
+        self.fragment_table.setColumnCount(len(self.data_container.variables)+len(self.data_container.func_list))
+        self.fragment_table.setHorizontalHeaderLabels(["--"]*(len(self.data_container.variables)) +
+                                                      (["F%s" % ("" if not n else str(n)) for n in
+                                                       range(len(self.data_container.func_list))] if
+                                                      self.check_if_last.checkState() else
+                                                      ["--"]*len(self.data_container.func_list)))
+        self.fragment_table.resizeColumnsToContents()
+        self.head_generated = True
+
+    def operate_given_row(self):
+        if not self.head_generated:
+            return
+        entered = self.row_edit.text()
+        if not entered.replace(" ", ""):
+            return
+        vcount = 0
+        maxcount = len(self.data_container.variables) + len(self.data_container.func_list)
+        ent_sep = []
+        for val in entered.split(" "):
+            if not val:
+                continue
+            vcount += 1
+            if vcount > maxcount:
+                UiTruthtableWindowNitro.generate_error("Invalid row data: unmatching length")
+                return
+            if val not in NUM:
+                if val != "N" and val != "n":
+                    UiTruthtableWindowNitro.generate_error("Invalid row data: unexpected symbol: %s" % val)
+                    return
+                ent_sep.append("N")
+                continue
+            ent_sep.append(val)
+        if vcount < maxcount:
+            UiTruthtableWindowNitro.generate_error("Invalid row data: unmatching length")
+            return
+
+        return tuple(ent_sep)
+
+    def add_given_row(self):
+        ent_sep = self.operate_given_row()
+        if ent_sep is None:
+            return
+        if ent_sep not in self.data_container.given_rows:
+            self.data_container.add_given_row(ent_sep)
+            self.fragment_table.setRowCount(self.fragment_table.rowCount()+1)
+            for n, val in enumerate(ent_sep):
+                self.fragment_table.setItem(self.fragment_table.rowCount()-1, n,
+                                            QTableWidgetItem(val))
+            self.del_row_btn.setEnabled(True)
+            self.change_row_btn.setEnabled(True)
+            self.row_edit.clear()
+
+    def delete_row(self):
+        if not self.fragment_table.selectedItems():
+            return
+        msg = QMessageBox.question(self.parent, "Confirm action", "Are you sure want to delete selected row?")
+        if msg == QMessageBox.Yes:
+            sel = self.fragment_table.selectedIndexes()[0].row()
+            self.fragment_table.removeRow(sel)
+            self.data_container.del_given_row(sel)
+            self.row_edit.clear()
+            self.fragment_table.clearSelection()
+            del sel
+            if not self.data_container.given_rows:
+                self.del_row_btn.setEnabled(False)
+                self.change_row_btn.setEnabled(False)
+                self.apply_change_row_btn.setEnabled(False)
+            if self.changing_row:
+                self.add_row_btn.setEnabled(True)
+                self.fragment_table.setEnabled(True)
+                self.check_if_last.setEnabled(True)
+                self.generate_head_btn.setEnabled(True)
+                self.change_row_btn.setEnabled(bool(self.data_container.given_rows))
+                self.changing_row = False
+
+    def choose_change(self):
+        if not self.fragment_table.selectedItems():
+            return
+        self.row_edit.insert(" ".join(self.data_container.given_rows[self.fragment_table.selectedIndexes()[0].row()]))
+        self.apply_change_row_btn.setEnabled(True)
+        self.add_row_btn.setEnabled(False)
+        self.fragment_table.setEnabled(False)
+        self.check_if_last.setEnabled(False)
+        self.generate_head_btn.setEnabled(False)
+        self.change_row_btn.setEnabled(False)
+        self.changing_row = True
+
+    def apply_changes(self):
+        ent_sep = self.operate_given_row()
+        if ent_sep is None:
+            self.delete_row()
+            return
+
+        sel = self.fragment_table.selectedIndexes()[0].row()
+        if ent_sep != self.data_container.given_rows[sel]:
+            for n, val in enumerate(ent_sep):
+                self.data_container.replace_given_row(sel, ent_sep)
+                self.fragment_table.setItem(sel, n,
+                                            QTableWidgetItem(val))
+        self.apply_change_row_btn.setEnabled(False)
+        self.add_row_btn.setEnabled(True)
+        self.fragment_table.setEnabled(True)
+        self.check_if_last.setEnabled(True)
+        self.generate_head_btn.setEnabled(True)
+        self.change_row_btn.setEnabled(True)
+        self.row_edit.clear()
+        self.fragment_table.clearSelection()
+        self.changing_row = False
+
+    def clearall(self):
+        msg = QMessageBox.question(self.parent, "Confirm action",
+                                   "Are you sure want to RESET ALL data in this session? It can't be undone!")
+        if msg == QMessageBox.Yes:
+            self.data_container.clearall()
+            self.changing_row = False
+            self.head_generated = False
+            self.fragment_table.clearSelection()
+            self.func_list.clearSelection()
+            self.results_list.clearSelection()
+            self.fragment_group.setEnabled(False)
+            self.result_group.setEnabled(False)
+
+            self.func_list.clear()
+            self.func_edit.clear()
+            self.del_func_btn.setEnabled(False)
+
+            self.fragment_table.clear()
+            self.fragment_table.setRowCount(0)
+            self.fragment_table.setColumnCount(0)
+
+            self.results_list.clear()
+            self.del_row_btn.setEnabled(False)
+            self.change_row_btn.setEnabled(False)
+            self.apply_change_row_btn.setEnabled(False)
+            self.functions_group.setEnabled(True)
+
+    def compute_result(self):
+        if not self.data_container.func_list or not self.data_container.given_rows:
+            return
+        print("enough")
 
 
 class TruthWindow(QMainWindow):
