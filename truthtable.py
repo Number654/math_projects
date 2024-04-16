@@ -355,7 +355,7 @@ class TruthTable(BaseTable):
                 ev = []
                 pass_row = False  # If the whole evaluated row doesn't match func_vals
                 for ex, fval in zip(self.expressions, func_vals):
-                    evaluated = ex.evaluate(self.vars, b)
+                    evaluated = ex.evaluate({var: val for var, val in zip(self.vars, b)})
                     if fval is not None:
                         if evaluated == fval:
                             ev.append(evaluated)
@@ -381,14 +381,14 @@ class TruthTable(BaseTable):
             raise TypeError("'find_given' method requires GivenTable instance, not '%s'" % typename(given))
         if self.contains(given) and not _all:
             if given.row_len == given.movable_limit and given.nexpr:  # If answer must contain names of expressions
-                return [''.join(self.vars)] + self.generate_func_names()
-            return [''.join(self.vars)]
+                return [' '.join(self.vars)] + self.generate_func_names()
+            return [' '.join(self.vars)]
 
         result = []
         head = self.vars + self.generate_func_names()
         for variant in permutations(range(given.movable_limit)):
             if self.contains(given, pattern=variant):
-                result.append(''.join((head[x] for x in variant)))
+                result.append(' '.join((head[x] for x in variant)))
                 if not _all:
                     break
         del head

@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 
 from truthUserInterface import UiTruthtableWindow
-from truthtable import LogicalExpression, DEFAULT_FUNC, NUM
+from truthtable import LogicalExpression, TruthTable, GivenKnownExpressionsTable, GivenTable, Row, DEFAULT_FUNC, NUM
 from PyQt5.QtWidgets import QApplication, QMainWindow, QMessageBox, QTableWidgetItem
+from PyQt5.QtCore import QObject, QRunnable, QThreadPool, pyqtSlot, pyqtSignal
 import sys
 
 
@@ -20,7 +21,9 @@ class DataContainer:
         self.raw_func_list = []
         self.results = []
         self.given_rows = []
+        self.given_rows_table = []  # For displaying in the table
         self.variables = set()
+        self.func_vals = []  # For optimization (if at least in one column of values of func values is eq to other)
         self.given_generated = None  # Given table instance
         self.func_last = False  # If functions are the last columns
 
@@ -32,15 +35,17 @@ class DataContainer:
     def add_result(self, res_obj):
         self.results.append(res_obj)
 
-    def add_given_row(self, _row):
+    def add_given_row(self, _row, _row_table=None):
         self.given_rows.append(_row)
+        self.given_rows_table.append(_row_table if _row_table is not None else _row)
 
     def replace_func(self, index, new):
         self.func_list[index] = new
         self.raw_func_list[index] = new.expression
 
-    def replace_given_row(self, index, new):
+    def replace_given_row(self, index, new, new_table=None):
         self.given_rows[index] = new
+        self.given_rows_table[index] = (new_table if new_table is not None else new)
 
     def del_func(self, index):
         self.func_list.pop(index)
@@ -51,6 +56,7 @@ class DataContainer:
 
     def del_given_row(self, index):
         self.given_rows.pop(index)
+        self.given_rows_table.pop(index)
 
     def clear_func(self):
         self.func_list = []
@@ -60,8 +66,37 @@ class DataContainer:
         self.clear_func()
         self.results = []
         self.given_rows = []
+        self.given_rows_table = []
         self.given_generated = None
         self.func_last = False
+        self.func_vals = []
+
+
+class TruthComputingSignals(QObject):
+    result_found = pyqtSignal(list)
+
+
+class TruthComputingWorker(QRunnable):
+    
+    def __init__(self, data_container):
+        super().__init__()
+        self.signals = TruthComputingSignals()
+        self.data_container = data_container
+
+    @pyqtSlot()
+    def run(self):
+        variables = tuple(self.data_container.variables)
+        functions = self.data_container.func_list
+        table = TruthTable(variables, functions)
+        if self.data_container.func_last:
+            fragment = GivenKnownExpressionsTable(tuple(map(Row, self.data_container.given_rows)),
+                                                  vars_amount=len(variables), expr_amount=len(functions))
+        else:
+            fragment = GivenTable(tuple(map(Row, self.data_container.given_rows)), vars_amount=len(variables),
+                                  expr_amount=len(functions))
+        table.generate_rows(func_vals=self.data_container.func_vals)
+        found = table.find_given(fragment)
+        self.signals.result_found.emit(found if found else ["No results found"])
 
 
 class UiTruthtableWindowNitro(UiTruthtableWindow):
@@ -69,6 +104,7 @@ class UiTruthtableWindowNitro(UiTruthtableWindow):
     def __init__(self, parent, _data_container):
         super().__init__()
         self.parent = parent
+        self.threadpool = QThreadPool()
         self.data_container = _data_container
         self.head_generated = False
         self.changing_row = False
@@ -181,42 +217,54 @@ class UiTruthtableWindowNitro(UiTruthtableWindow):
                                                       ["--"]*len(self.data_container.func_list)))
         self.fragment_table.resizeColumnsToContents()
         self.head_generated = True
+        self.data_container.func_last = self.check_if_last.checkState()
 
     def operate_given_row(self):
         if not self.head_generated:
-            return
+            return None, None
         entered = self.row_edit.text()
         if not entered.replace(" ", ""):
-            return
+            return None, None
         vcount = 0
-        maxcount = len(self.data_container.variables) + len(self.data_container.func_list)
+        nvar = len(self.data_container.variables)
+        func_index = None if not self.data_container.func_last else nvar
+        maxcount = nvar + len(self.data_container.func_list)
         ent_sep = []
-        for val in entered.split(" "):
-            if not val:
-                continue
+        readable_sep = []
+        for i, val in enumerate(filter(lambda x: bool(x), entered.split(" "))):
             vcount += 1
             if vcount > maxcount:
                 UiTruthtableWindowNitro.generate_error("Invalid row data: unmatching length")
-                return
+                return None, None
             if val not in NUM:
                 if val != "N" and val != "n":
                     UiTruthtableWindowNitro.generate_error("Invalid row data: unexpected symbol: %s" % val)
-                    return
+                    return None, None
                 ent_sep.append("N")
+                readable_sep.append(None)
                 continue
             ent_sep.append(val)
+            readable_sep.append(int(val))
         if vcount < maxcount:
             UiTruthtableWindowNitro.generate_error("Invalid row data: unmatching length")
-            return
+            return None, None
+        if func_index is not None:
+            if not self.data_container.func_vals:
+                self.data_container.func_vals = readable_sep[func_index:]
+            else:
+                for stored_v, func_v, ind in zip(self.data_container.func_vals, readable_sep[func_index:],
+                                                 range(len(self.data_container.func_list))):
+                    if stored_v != func_v:
+                        self.data_container.func_vals[ind] = None
 
-        return tuple(ent_sep)
+        return tuple(ent_sep), tuple(readable_sep)
 
     def add_given_row(self):
-        ent_sep = self.operate_given_row()
+        ent_sep, rsep = self.operate_given_row()
         if ent_sep is None:
             return
         if ent_sep not in self.data_container.given_rows:
-            self.data_container.add_given_row(ent_sep)
+            self.data_container.add_given_row(rsep, _row_table=ent_sep)
             self.fragment_table.setRowCount(self.fragment_table.rowCount()+1)
             for n, val in enumerate(ent_sep):
                 self.fragment_table.setItem(self.fragment_table.rowCount()-1, n,
@@ -251,7 +299,8 @@ class UiTruthtableWindowNitro(UiTruthtableWindow):
     def choose_change(self):
         if not self.fragment_table.selectedItems():
             return
-        self.row_edit.insert(" ".join(self.data_container.given_rows[self.fragment_table.selectedIndexes()[0].row()]))
+        self.row_edit.insert(" ".join(
+            self.data_container.given_rows_table[self.fragment_table.selectedIndexes()[0].row()]))
         self.apply_change_row_btn.setEnabled(True)
         self.add_row_btn.setEnabled(False)
         self.fragment_table.setEnabled(False)
@@ -261,17 +310,16 @@ class UiTruthtableWindowNitro(UiTruthtableWindow):
         self.changing_row = True
 
     def apply_changes(self):
-        ent_sep = self.operate_given_row()
+        ent_sep, rsep = self.operate_given_row()
         if ent_sep is None:
             self.delete_row()
             return
 
         sel = self.fragment_table.selectedIndexes()[0].row()
         if ent_sep != self.data_container.given_rows[sel]:
+            self.data_container.replace_given_row(sel, rsep, new_table=ent_sep)
             for n, val in enumerate(ent_sep):
-                self.data_container.replace_given_row(sel, ent_sep)
-                self.fragment_table.setItem(sel, n,
-                                            QTableWidgetItem(val))
+                self.fragment_table.setItem(sel, n, QTableWidgetItem(val))
         self.apply_change_row_btn.setEnabled(False)
         self.add_row_btn.setEnabled(True)
         self.fragment_table.setEnabled(True)
@@ -308,11 +356,21 @@ class UiTruthtableWindowNitro(UiTruthtableWindow):
             self.change_row_btn.setEnabled(False)
             self.apply_change_row_btn.setEnabled(False)
             self.functions_group.setEnabled(True)
+            self.get_result_btn.setEnabled(True)
 
     def compute_result(self):
         if not self.data_container.func_list or not self.data_container.given_rows:
             return
-        print("enough")
+        self.result_group.setEnabled(True)
+        self.fragment_group.setEnabled(False)
+        self.get_result_btn.setEnabled(False)
+        worker = TruthComputingWorker(self.data_container)
+        worker.signals.result_found.connect(self.set_result)
+        self.threadpool.start(worker)
+
+    def set_result(self, values):
+        for val in values:
+            self.results_list.addItem(val)
 
 
 class TruthWindow(QMainWindow):

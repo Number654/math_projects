@@ -11,16 +11,11 @@ test2 = r"x^y"
 test3 = r"()()()(())"
 
 l1 = LogicalExpression(test1)
-l2 = LogicalExpression(test2)
-t = TruthTable(("x", "y", "z"), (l1, l2))
-t2 = TruthTable(("x", "y"), l2)
-t.generate_rows()
-t2.generate_rows()
-
+t = TruthTable(("x", "y", "z", "w"), l1)
+t.generate_rows(func_vals=[0])
 
 print(t)
 print()
-print(t2)
 
 print()
 print(str((time()-t1)*1000), "ms")
